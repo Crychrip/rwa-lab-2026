@@ -95,7 +95,9 @@ contract RedemptionQueue is AccessControl {
     ///         8-decimal NAV
     /// @dev The product carries 18 + 8 = 26 decimals and you want 6 — divide by 10 to the what?
     function assetsAtNav(uint256 shares, uint256 nav) public pure returns (uint256) {
-        revert("TODO Ex5.1: assetsAtNav");
+        // 份额是 18 位，NAV 是 8 位，USDC 只要 6 位，所以要除掉 1e20。
+        // 先乘后除，只在最后舍一次。
+        return shares * nav / DECIMALS_SCALE;
     }
 
     // ==================================================================
@@ -112,7 +114,21 @@ contract RedemptionQueue is AccessControl {
     ///      Locking the rate now is the point: the payout must not drift with the NAV while
     ///      the ticket waits in the queue.
     function enqueue(uint256 shares) external returns (uint256 id) {
-        revert("TODO Ex5.2: enqueue");
+        if (shares == 0) revert ZeroAmount();
+
+        // 价格在入队时就锁死。这张票在队列里等的时候，NAV 再变也不改这笔赔付。
+        uint256 assets = assetsAtNav(shares, vault.navPerShare());
+
+        // 先记账再转币。转账失败的话，上面的改动会一起回滚。
+        id = requests.length;
+        requests.push(Request({owner: msg.sender, shares: shares, assetsLocked: assets, settled: false}));
+        pendingShares += shares;
+        pendingAssets += assets;
+
+        // 调用前要先 approve。这里把份额拉进队列。
+        IERC20(address(tBill)).safeTransferFrom(msg.sender, address(this), shares);
+
+        emit RedeemRequested(id, msg.sender, shares, assets);
     }
 
     // ==================================================================
@@ -132,7 +148,37 @@ contract RedemptionQueue is AccessControl {
     ///        - credit the owner's claimable balance and totalClaimable
     ///      Return how much you actually paid out.
     function settle(uint256 assets) external onlyRole(SETTLER_ROLE) returns (uint256 filled) {
-        revert("TODO Ex5.3: settle");
+        uint256 remaining = assets;
+        uint256 length = requests.length;
+
+        while (head < length) {
+            Request storage r = requests[head];
+
+            // 队首必须整笔付清。钱不够就停，不能先付后面更小的那张。
+            if (r.assetsLocked > remaining) break;
+
+            uint256 id = head;
+            uint256 payout = r.assetsLocked;
+            uint256 shares = r.shares;
+            address owner = r.owner;
+
+            // 先改状态，再去金库拿钱、再烧掉份额。
+            r.settled = true;
+            head = id + 1;
+            remaining -= payout;
+            pendingShares -= shares;
+            pendingAssets -= payout;
+            claimable[owner] += payout;
+            totalClaimable += payout;
+
+            // 金库里没钱会 revert。烧份额也算余额变动，所以队列自己得在白名单里。
+            vault.releaseReserves(address(this), payout);
+            tBill.burn(address(this), shares);
+
+            emit Settled(id, owner, payout);
+        }
+
+        filled = assets - remaining;
     }
 
     // ==================================================================
@@ -142,6 +188,15 @@ contract RedemptionQueue is AccessControl {
     /// @notice Withdraw the cash credited to you by settled tickets
     /// @dev Checks-effects-interactions: zero the balance before the transfer.
     function claim() external returns (uint256 assets) {
-        revert("TODO Ex5.4: claim");
+        assets = claimable[msg.sender];
+        if (assets == 0) revert NothingToClaim();
+
+        // 先把余额清成 0 再转账，不然重入可以领两次。
+        claimable[msg.sender] = 0;
+        totalClaimable -= assets;
+
+        usdc.safeTransfer(msg.sender, assets);
+
+        emit Claimed(msg.sender, assets);
     }
 }
