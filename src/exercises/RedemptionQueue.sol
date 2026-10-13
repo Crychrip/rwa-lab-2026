@@ -116,16 +116,16 @@ contract RedemptionQueue is AccessControl {
     function enqueue(uint256 shares) external returns (uint256 id) {
         if (shares == 0) revert ZeroAmount();
 
-        // 价格在入队时就锁死。这张票在队列里等的时候，NAV 再变也不改这笔赔付。
+        // 价格在入队时就锁死
         uint256 assets = assetsAtNav(shares, vault.navPerShare());
 
-        // 先记账再转币。转账失败的话，上面的改动会一起回滚。
+        // 先记账再转币
         id = requests.length;
         requests.push(Request({owner: msg.sender, shares: shares, assetsLocked: assets, settled: false}));
         pendingShares += shares;
         pendingAssets += assets;
 
-        // 调用前要先 approve。这里把份额拉进队列。
+        // 调用前先 approve
         IERC20(address(tBill)).safeTransferFrom(msg.sender, address(this), shares);
 
         emit RedeemRequested(id, msg.sender, shares, assets);
@@ -154,7 +154,7 @@ contract RedemptionQueue is AccessControl {
         while (head < length) {
             Request storage r = requests[head];
 
-            // 队首必须整笔付清。钱不够就停，不能先付后面更小的那张。
+            // 队首必须整笔付清
             if (r.assetsLocked > remaining) break;
 
             uint256 id = head;
@@ -162,7 +162,7 @@ contract RedemptionQueue is AccessControl {
             uint256 shares = r.shares;
             address owner = r.owner;
 
-            // 先改状态，再去金库拿钱、再烧掉份额。
+            // 先改状态，再去金库拿钱、再烧掉份额
             r.settled = true;
             head = id + 1;
             remaining -= payout;
@@ -171,7 +171,7 @@ contract RedemptionQueue is AccessControl {
             claimable[owner] += payout;
             totalClaimable += payout;
 
-            // 金库里没钱会 revert。烧份额也算余额变动，所以队列自己得在白名单里。
+            // 金库里没钱会 revert
             vault.releaseReserves(address(this), payout);
             tBill.burn(address(this), shares);
 
@@ -191,7 +191,7 @@ contract RedemptionQueue is AccessControl {
         assets = claimable[msg.sender];
         if (assets == 0) revert NothingToClaim();
 
-        // 先把余额清成 0 再转账，不然重入可以领两次。
+        // 先把余额清成 0 再转账防止重复转帐
         claimable[msg.sender] = 0;
         totalClaimable -= assets;
 

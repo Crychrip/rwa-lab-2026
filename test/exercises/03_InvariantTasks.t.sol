@@ -115,8 +115,7 @@ contract BridgeHandler is Test {
         if (reserve == 0) return;
         assets = bound(assets, 1, reserve);
 
-        // The handler holds SETTLER_ROLE, so this is called as the handler itself. Whatever
-        // settle() pays out is <= assets <= reserve, so releaseReserves cannot run dry here.
+        // 付出的不会超过金库余额
         queue.settle(assets);
 
         ghost_settles++;
@@ -193,9 +192,7 @@ contract InvariantTasksTest is Test {
     ///      and never invents one. The assertion below is wrong on purpose (it asserts a
     ///      constant 1), which is why it goes red. Turn it into the property you want.
     function invariant_EscrowConservation() public view {
-        // Every share the queue physically holds is a share it still owes a payout for, and
-        // vice versa. enqueue adds to both sides; settle burns and subtracts from both sides.
-        // Drop the `pendingShares -= shares` in settle and this is the line that goes red.
+        // 实际份额等于没结清的份额
         assertEq(
             tBill.balanceOf(address(queue)),
             queue.pendingShares(),
@@ -213,9 +210,7 @@ contract InvariantTasksTest is Test {
     ///      vault's USDC buffer, or in the T-Bills at the custodian? That gap is the whole
     ///      lesson of this lab — write your answer up as question C1.
     function invariant_SettlementSolvency() public view {
-        // Cash only enters the queue through settle (exactly a ticket's payout, credited to
-        // claimable at the same time) and only leaves through claim (which debits claimable
-        // first). So the queue can never owe settled cash it is not actually holding.
+        // 要付没领走的钱
         assertGe(
             usdc.balanceOf(address(queue)),
             queue.totalClaimable(),
