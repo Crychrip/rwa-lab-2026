@@ -220,3 +220,74 @@ What the zip must contain:
 
 The discussion prompts live in `STUDENT-QUESTIONS.md` — one per plank, no standard answers, and the
 real point of this lab.
+
+---
+
+## 8. Architecture — the four planks and the bridge
+
+Cash is **USDC** (6 decimals); the share is **tBILL** (18 decimals); the NAV is **8 decimals**.
+The bridge is the line between what the chain can verify and what it can only be told.
+
+```mermaid
+flowchart TB
+  subgraph offchain [Off-chain — attested, not checked by the chain]
+    P1["Plank 1 · Custody<br/>SPV legally owns the T-Bills<br/>MockTBillCustodian.realHoldings"]
+    P2["Plank 2 · Attestation<br/>one reporter types the NAV"]
+    KYC["Plank 4 · Admission<br/>KYC decides who may hold"]
+  end
+
+  subgraph onchain [On-chain — balances the chain can see]
+    Reg[ComplianceRegistry]
+    Feed["MockPriceFeed<br/>NAV, 8 decimals"]
+    Vault[TBillVault]
+    Token["TBillToken<br/>shares, 18 decimals"]
+    Queue["RedemptionQueue<br/>Plank 3 · Redemption, T+1"]
+    Holder[Holder]
+  end
+
+  KYC -->|setWhitelisted| Reg
+  Reg -->|both ends of every tBILL move| Token
+  P2 -->|attest| Feed
+  Feed -->|navPerShare prices subscribe and payout| Vault
+
+  Holder -->|1 subscribe: USDC in| Vault
+  Vault -->|2 mint tBILL at today's NAV| Holder
+  Vault -->|3 invest: USDC crosses out| P1
+  P1 -->|4 depositReserves: USDC crosses back| Vault
+  Holder -->|5 enqueue: tBILL in, payout locked| Queue
+  Vault -->|6 settle: USDC to the oldest ticket| Queue
+  Queue -->|7 burn the escrowed tBILL| Token
+  Queue -->|8 claim: USDC out| Holder
+```
+
+**Where cash and shares cross the bridge**
+
+- **Shares (tBILL, 18 dec)** are born and die entirely **on-chain**: `subscribe()` mints them to
+  the holder, `enqueue()` escrows them in the queue, `settle()` burns them. Every move passes the
+  whitelist check in `TBillToken._update` (plank ④).
+- **Cash (USDC, 6 dec)** is the only thing that actually *crosses* to the off-chain side:
+  `invest()` wires the vault's buffer to the custodian to buy T-Bills (cash leaves on-chain
+  view, `realHoldings()` goes up — plank ①), and `depositReserves()` brings the T+1 sale proceeds
+  back so the queue can pay.
+- **The NAV (8 dec)** is the one-way whisper from off-chain: `attest()` (plank ②) writes a number
+  the whole book trusts for both pricing and payout — the plank Ex7 breaks.
+- **The queue (plank ③)** is where T+1 lives: shares in → a ticket → `settle()` FIFO as cash lands
+  → `claim()` pays USDC out. Its two invariants (escrow conservation, settlement solvency) are the
+  only things the chain *can* still prove; the third — that the buffer covers what the queue owes —
+  is false, because the extra value sits in the Treasuries off-chain, not in the vault's dollars.
+
+---
+
+## Deployment (Sepolia)
+
+Deployed with `script/Deploy.s.sol` and verified (Sourcify exact match). Chain id `11155111`.
+
+| Contract | Address | Etherscan |
+|---|---|---|
+| MockUSDC | `0xa6246557136572C93a24078Dc8cFAA94FdF7d1D8` | https://sepolia.etherscan.io/address/0xa6246557136572C93a24078Dc8cFAA94FdF7d1D8#code |
+| ComplianceRegistry | `0x6A749e6E27D639813729ee0fbcd23Bce1F89957c` | https://sepolia.etherscan.io/address/0x6A749e6E27D639813729ee0fbcd23Bce1F89957c#code |
+| MockPriceFeed | `0x699FFdE2A088Ad90dba92e5465049c149FaEC2Df` | https://sepolia.etherscan.io/address/0x699FFdE2A088Ad90dba92e5465049c149FaEC2Df#code |
+| TBillToken | `0x606E4a6a0B8b548Dd9A7E95F0eAC09FC95DC4E3C` | https://sepolia.etherscan.io/address/0x606E4a6a0B8b548Dd9A7E95F0eAC09FC95DC4E3C#code |
+| MockTBillCustodian | `0xC2b69ed24C3b90D8F11E5170B641afB154C1153d` | https://sepolia.etherscan.io/address/0xC2b69ed24C3b90D8F11E5170B641afB154C1153d#code |
+| TBillVault | `0xE09a05D99cdee15e819d7B7aB7954689C2A612F9` | https://sepolia.etherscan.io/address/0xE09a05D99cdee15e819d7B7aB7954689C2A612F9#code |
+| RedemptionQueue | `0xD34f73B5BC81536bfCB6EF369454DE8c4559df00` | https://sepolia.etherscan.io/address/0xD34f73B5BC81536bfCB6EF369454DE8c4559df00#code |

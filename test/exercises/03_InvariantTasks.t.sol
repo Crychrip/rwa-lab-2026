@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;
 
-import {Test} from "forge-std/Test.sol";
+import {Test, console} from "forge-std/Test.sol";
 
 import {MockUSDC} from "../../src/MockUSDC.sol";
 import {ComplianceRegistry} from "../../src/ComplianceRegistry.sol";
@@ -90,21 +90,52 @@ contract BridgeHandler is Test {
     ///       3) call queue.enqueue(shares) as that user
     ///       4) do not forget the approval — enqueue pulls the shares in with transferFrom
     ///      Hint: the two parameters have no names yet. Name them first.
-    function enqueue(uint256, uint256) external {}
+    function enqueue(uint256 userSeed, uint256 shares) external {
+        address user = users[bound(userSeed, 0, users.length - 1)];
+
+        uint256 balance = tBill.balanceOf(user);
+        if (balance == 0) return;
+        shares = bound(shares, 1, balance);
+
+        vm.startPrank(user);
+        tBill.approve(address(queue), shares);
+        queue.enqueue(shares);
+        vm.stopPrank();
+
+        ghost_enqueues++;
+    }
 
     /// TODO Ex6.2 — implement settle
     /// @dev Steps:
     ///       1) bound `assets` to [1, vault.reserveBalance()] (return early if the vault is empty)
     ///       2) call queue.settle(assets)
     ///      Settling with less cash than the head ticket needs is legal — it simply pays nothing.
-    function settle(uint256) external {}
+    function settle(uint256 assets) external {
+        uint256 reserve = vault.reserveBalance();
+        if (reserve == 0) return;
+        assets = bound(assets, 1, reserve);
+
+        // The handler holds SETTLER_ROLE, so this is called as the handler itself. Whatever
+        // settle() pays out is <= assets <= reserve, so releaseReserves cannot run dry here.
+        queue.settle(assets);
+
+        ghost_settles++;
+    }
 
     /// TODO Ex6.3 — implement claim
     /// @dev Steps:
     ///       1) pick one user at random
     ///       2) if that user has nothing claimable, return early
     ///       3) call queue.claim() as that user
-    function claim(uint256) external {}
+    function claim(uint256 userSeed) external {
+        address user = users[bound(userSeed, 0, users.length - 1)];
+        if (queue.claimable(user) == 0) return;
+
+        vm.prank(user);
+        queue.claim();
+
+        ghost_claims++;
+    }
 }
 
 contract InvariantTasksTest is Test {
@@ -162,7 +193,14 @@ contract InvariantTasksTest is Test {
     ///      and never invents one. The assertion below is wrong on purpose (it asserts a
     ///      constant 1), which is why it goes red. Turn it into the property you want.
     function invariant_EscrowConservation() public view {
-        assertEq(tBill.balanceOf(address(queue)), 1, "TODO Ex6.4");
+        // Every share the queue physically holds is a share it still owes a payout for, and
+        // vice versa. enqueue adds to both sides; settle burns and subtracts from both sides.
+        // Drop the `pendingShares -= shares` in settle and this is the line that goes red.
+        assertEq(
+            tBill.balanceOf(address(queue)),
+            queue.pendingShares(),
+            "escrow conservation: the queue holds exactly the shares it still owes for"
+        );
     }
 
     /// TODO Ex6.5 — settlement solvency (plank c)
@@ -175,6 +213,24 @@ contract InvariantTasksTest is Test {
     ///      vault's USDC buffer, or in the T-Bills at the custodian? That gap is the whole
     ///      lesson of this lab — write your answer up as question C1.
     function invariant_SettlementSolvency() public view {
-        assertEq(usdc.balanceOf(address(queue)), 1, "TODO Ex6.5");
+        // Cash only enters the queue through settle (exactly a ticket's payout, credited to
+        // claimable at the same time) and only leaves through claim (which debits claimable
+        // first). So the queue can never owe settled cash it is not actually holding.
+        assertGe(
+            usdc.balanceOf(address(queue)),
+            queue.totalClaimable(),
+            "settlement solvency: the queue holds at least what it has promised to pay"
+        );
+    }
+
+    /// @dev Sanity: did the fuzzer really drive the queue, or did the handler return early
+    ///      every time? Deliberately NOT written as an invariant — Foundry checks invariants
+    ///      once before the first random call, when every ghost counter is still zero, so an
+    ///      assertion here would fail for the wrong reason. The hook just logs the counters
+    ///      after each run (visible with -vv) so a silent no-op handler is easy to spot.
+    function afterInvariant() public view {
+        console.log("enqueues", handler.ghost_enqueues());
+        console.log("settles ", handler.ghost_settles());
+        console.log("claims  ", handler.ghost_claims());
     }
 }

