@@ -19,7 +19,7 @@ numbers and yields, you have drifted back into Lab 1.
 
 ## 0. Submission record
 
-### Architecture — the four planks and the bridge
+## Architecture — the four planks and the bridge
 
 Cash is **USDC** (6 decimals); the share is **tBILL** (18 decimals); the NAV is **8 decimals**.
 The bridge is the line between what the chain can verify and what it can only be told.
@@ -42,12 +42,12 @@ The bridge is the line between what the chain can verify and what it can only be
   only things the chain *can* still prove; the third — that the buffer covers what the queue owes —
   is false, because the extra value sits in the Treasuries off-chain, not in the vault's dollars.
 
-### Evidence
+## Evidence
 
 `make exercise`: 19 tests passed.
 ![make exercise](<docs/make exercise.png>)
 
-### Deployment (Sepolia)
+## Deployment (Sepolia)
 
 Deployed with `script/Deploy.s.sol` on Sepolia (chain id `11155111`).
 
